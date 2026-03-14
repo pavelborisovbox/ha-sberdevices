@@ -15,10 +15,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.color import brightness_to_value, value_to_brightness
 from homeassistant.util.scaling import scale_ranged_value_to_int_range
 
-from .api import DeviceAPI, HomeAPI
+from .api import DeviceAPI
 from .const import DOMAIN
 
 
@@ -41,36 +42,45 @@ S_RANGE = (0, 100)
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    home: HomeAPI = hass.data[DOMAIN][entry.entry_id]["home"]
-    await home.update_devices_cache()
+
+    data = hass.data[DOMAIN][entry.entry_id]
+
+    home = data["home"]
+    coordinator = data["coordinator"]
 
     light_types = ("bulb", "ledstrip", "night_lamp")
 
-    async_add_entities(
-        [
-            SberLightEntity(
-                DeviceAPI(home, device["id"]),
-                next(t for t in light_types if t in device["image_set_type"]),
+    entities = []
+
+    for device in coordinator.data.values():
+        if any(t in device["image_set_type"] for t in light_types):
+
+            device_type = next(
+                t for t in light_types if t in device["image_set_type"]
             )
-            for device in home.get_cached_devices().values()
-            if any(t in device["image_set_type"] for t in light_types)
-        ]
-    )
+
+            api = DeviceAPI(home, device["id"])
+
+            entities.append(
+                SberLightEntity(
+                    coordinator,
+                    api,
+                    device_type,
+                )
+            )
+
+    async_add_entities(entities)
 
 
-class SberLightEntity(LightEntity):
-    def __init__(self, api: DeviceAPI, device_type: str) -> None:
+class SberLightEntity(CoordinatorEntity, LightEntity):
+    """Sber light entity."""
+
+    def __init__(self, coordinator, api: DeviceAPI, device_type: str) -> None:
+        super().__init__(coordinator)
+
         self._api = api
         self._hs_color: tuple[float, float] | None = None
         self._real_color_temp_range = get_color_temp_range(device_type)
-
-    @property
-    def should_poll(self) -> bool:
-        return True
-
-    async def async_update(self):
-        await self._api.update()
-        self._hs_color = None
 
     @property
     def unique_id(self) -> str:
@@ -97,7 +107,7 @@ class SberLightEntity(LightEntity):
 
     @property
     def supported_color_modes(self) -> set[ColorMode]:
-        """Return supported color modes."""
+
         light_mode = self._api.get_attribute("light_mode")["enum_values"]["values"]
 
         modes: set[ColorMode] = set()
@@ -115,6 +125,7 @@ class SberLightEntity(LightEntity):
 
     @property
     def color_mode(self) -> ColorMode:
+
         mode = self._api.get_state("light_mode")["enum_value"]
 
         if mode == "colour":
@@ -127,13 +138,16 @@ class SberLightEntity(LightEntity):
 
     @property
     def brightness_range(self) -> tuple[int, int]:
-        brightness_range = self._api.get_attribute("light_brightness")["int_values"][
-            "range"
-        ]
+
+        brightness_range = self._api.get_attribute("light_brightness")[
+            "int_values"
+        ]["range"]
+
         return brightness_range["min"], brightness_range["max"]
 
     @property
     def brightness(self) -> int | None:
+
         if self.color_mode not in (ColorMode.HS, ColorMode.COLOR_TEMP):
             return None
 
@@ -142,6 +156,7 @@ class SberLightEntity(LightEntity):
             return value_to_brightness(self.color_range["v"], brightness)
 
         brightness = int(self._api.get_state("light_brightness")["integer_value"])
+
         return value_to_brightness(self.brightness_range, brightness)
 
     @property
@@ -154,24 +169,30 @@ class SberLightEntity(LightEntity):
 
     @property
     def color_temp_range(self) -> tuple[int, int]:
-        colour_temp_range = self._api.get_attribute("light_colour_temp")["int_values"][
-            "range"
-        ]
+
+        colour_temp_range = self._api.get_attribute("light_colour_temp")[
+            "int_values"
+        ]["range"]
+
         return colour_temp_range["min"], colour_temp_range["max"]
 
     @property
     def color_temp_kelvin(self) -> int | None:
+
         if self.color_mode != ColorMode.COLOR_TEMP:
             return None
 
         colour_temp = int(self._api.get_state("light_colour_temp")["integer_value"])
 
         return scale_ranged_value_to_int_range(
-            self.color_temp_range, self._real_color_temp_range, colour_temp
+            self.color_temp_range,
+            self._real_color_temp_range,
+            colour_temp,
         )
 
     @property
     def color_range(self) -> dict[str, tuple[int, int]]:
+
         colour_values = self._api.get_attribute("light_colour")["color_values"]
 
         return {
@@ -182,6 +203,7 @@ class SberLightEntity(LightEntity):
 
     @property
     def hs_color(self) -> tuple[float, float] | None:
+
         if self.color_mode != ColorMode.HS:
             return None
 
@@ -191,14 +213,20 @@ class SberLightEntity(LightEntity):
         colour = self._api.get_state("light_colour")["color_value"]
 
         return (
-            scale_ranged_value_to_int_range(self.color_range["h"], H_RANGE, colour["h"]),
-            scale_ranged_value_to_int_range(self.color_range["s"], S_RANGE, colour["s"]),
+            scale_ranged_value_to_int_range(
+                self.color_range["h"], H_RANGE, colour["h"]
+            ),
+            scale_ranged_value_to_int_range(
+                self.color_range["s"], S_RANGE, colour["s"]
+            ),
         )
 
     async def async_turn_on(self, **kwargs) -> None:
+
         states = [{"key": "on_off", "bool_value": True}]
 
         if ATTR_BRIGHTNESS in kwargs:
+
             brightness = kwargs[ATTR_BRIGHTNESS]
 
             states.append(
@@ -211,6 +239,7 @@ class SberLightEntity(LightEntity):
             )
 
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
+
             t = scale_ranged_value_to_int_range(
                 self._real_color_temp_range,
                 self.color_temp_range,
@@ -225,25 +254,32 @@ class SberLightEntity(LightEntity):
             )
 
         if ATTR_HS_COLOR in kwargs:
+
             h, s = kwargs[ATTR_HS_COLOR]
 
             states.extend(
                 (
                     {"key": "light_mode", "enum_value": "colour"},
                     {
-                        "key": "light_colour",
-                        "color_value": {
-                            "h": scale_ranged_value_to_int_range(
-                                H_RANGE, self.color_range["h"], h
-                            ),
-                            "s": scale_ranged_value_to_int_range(
-                                S_RANGE, self.color_range["s"], s
-                            ),
-                            "v": math.ceil(
-                                brightness_to_value(
-                                    self.color_range["v"], self.brightness or 255
-                                )
-                            ),
+                        "key": "light_colour": {
+                            "color_value": {
+                                "h": scale_ranged_value_to_int_range(
+                                    H_RANGE,
+                                    self.color_range["h"],
+                                    h,
+                                ),
+                                "s": scale_ranged_value_to_int_range(
+                                    S_RANGE,
+                                    self.color_range["s"],
+                                    s,
+                                ),
+                                "v": math.ceil(
+                                    brightness_to_value(
+                                        self.color_range["v"],
+                                        self.brightness or 255,
+                                    )
+                                ),
+                            }
                         },
                     },
                 )
@@ -251,5 +287,10 @@ class SberLightEntity(LightEntity):
 
         await self._api.set_states(states)
 
+        await self.coordinator.async_request_refresh()
+
     async def async_turn_off(self, **kwargs) -> None:
+
         await self._api.set_on_off(False)
+
+        await self.coordinator.async_request_refresh()
