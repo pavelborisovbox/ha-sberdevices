@@ -261,25 +261,24 @@ class SberLightEntity(CoordinatorEntity, LightEntity):
                 (
                     {"key": "light_mode", "enum_value": "colour"},
                     {
-                        "key": "light_colour": {
-                            "color_value": {
-                                "h": scale_ranged_value_to_int_range(
-                                    H_RANGE,
-                                    self.color_range["h"],
-                                    h,
-                                ),
-                                "s": scale_ranged_value_to_int_range(
-                                    S_RANGE,
-                                    self.color_range["s"],
-                                    s,
-                                ),
-                                "v": math.ceil(
-                                    brightness_to_value(
-                                        self.color_range["v"],
-                                        self.brightness or 255,
-                                    )
-                                ),
-                            }
+                        "key": "light_colour",
+                        "color_value": {
+                            "h": scale_ranged_value_to_int_range(
+                                H_RANGE,
+                                self.color_range["h"],
+                                h,
+                            ),
+                            "s": scale_ranged_value_to_int_range(
+                                S_RANGE,
+                                self.color_range["s"],
+                                s,
+                            ),
+                            "v": math.ceil(
+                                brightness_to_value(
+                                    self.color_range["v"],
+                                    self.brightness or 255,
+                                )
+                            ),
                         },
                     },
                 )
