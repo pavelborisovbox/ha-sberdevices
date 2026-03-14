@@ -1,4 +1,4 @@
-"""Support for SberDevices lights."""
+"""Support for SberDevices lights with coordinator."""
 
 from __future__ import annotations
 
@@ -22,52 +22,37 @@ from homeassistant.util.scaling import scale_ranged_value_to_int_range
 from .api import DeviceAPI
 from .const import DOMAIN
 
-
-def get_color_temp_range(device_type: str) -> tuple[int, int]:
-    match device_type:
-        case "ledstrip":
-            return 2000, 6500
-        case "bulb":
-            return 2700, 6500
-        case "night_lamp":
-            return 2700, 6500
-        case _:
-            return 2700, 6500
-
-
 H_RANGE = (0, 360)
 S_RANGE = (0, 100)
 
 
+def get_color_temp_range(device_type: str) -> tuple[int, int]:
+    """Return the color temperature range for device type."""
+    return {
+        "ledstrip": (2000, 6500),
+        "bulb": (2700, 6500),
+        "night_lamp": (2700, 6500),
+    }.get(device_type, (2700, 6500))
+
+
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-
+    """Set up lights from a config entry using the coordinator."""
     data = hass.data[DOMAIN][entry.entry_id]
-
-    home = data["home"]
     coordinator = data["coordinator"]
+    home = data["home"]
 
     light_types = ("bulb", "ledstrip", "night_lamp")
-
     entities = []
 
     for device in coordinator.data.values():
         if any(t in device["image_set_type"] for t in light_types):
-
-            device_type = next(
-                t for t in light_types if t in device["image_set_type"]
-            )
-
+            device_type = next(t for t in light_types if t in device["image_set_type"])
             api = DeviceAPI(home, device["id"])
-
-            entities.append(
-                SberLightEntity(
-                    coordinator,
-                    api,
-                    device_type,
-                )
-            )
+            entities.append(SberLightEntity(coordinator, api, device_type))
 
     async_add_entities(entities)
 
@@ -77,7 +62,6 @@ class SberLightEntity(CoordinatorEntity, LightEntity):
 
     def __init__(self, coordinator, api: DeviceAPI, device_type: str) -> None:
         super().__init__(coordinator)
-
         self._api = api
         self._hs_color: tuple[float, float] | None = None
         self._real_color_temp_range = get_color_temp_range(device_type)
@@ -107,57 +91,39 @@ class SberLightEntity(CoordinatorEntity, LightEntity):
 
     @property
     def supported_color_modes(self) -> set[ColorMode]:
-
         light_mode = self._api.get_attribute("light_mode")["enum_values"]["values"]
-
         modes: set[ColorMode] = set()
-
         if "colour" in light_mode:
             modes.add(ColorMode.HS)
-
         if "white" in light_mode:
             modes.add(ColorMode.COLOR_TEMP)
-
         if not modes:
             modes.add(ColorMode.ONOFF)
-
         return modes
 
     @property
     def color_mode(self) -> ColorMode:
-
         mode = self._api.get_state("light_mode")["enum_value"]
-
         if mode == "colour":
             return ColorMode.HS
-
         if mode == "white":
             return ColorMode.COLOR_TEMP
-
         return ColorMode.ONOFF
 
     @property
     def brightness_range(self) -> tuple[int, int]:
-
-        brightness_range = self._api.get_attribute("light_brightness")[
-            "int_values"
-        ]["range"]
-
-        return brightness_range["min"], brightness_range["max"]
+        br_range = self._api.get_attribute("light_brightness")["int_values"]["range"]
+        return br_range["min"], br_range["max"]
 
     @property
     def brightness(self) -> int | None:
-
         if self.color_mode not in (ColorMode.HS, ColorMode.COLOR_TEMP):
             return None
-
         if self.color_mode == ColorMode.HS:
-            brightness = self._api.get_state("light_colour")["color_value"]["v"]
-            return value_to_brightness(self.color_range["v"], brightness)
-
-        brightness = int(self._api.get_state("light_brightness")["integer_value"])
-
-        return value_to_brightness(self.brightness_range, brightness)
+            v = self._api.get_state("light_colour")["color_value"]["v"]
+            return value_to_brightness(self.color_range["v"], v)
+        b = int(self._api.get_state("light_brightness")["integer_value"])
+        return value_to_brightness(self.brightness_range, b)
 
     @property
     def min_color_temp_kelvin(self) -> int:
@@ -169,127 +135,76 @@ class SberLightEntity(CoordinatorEntity, LightEntity):
 
     @property
     def color_temp_range(self) -> tuple[int, int]:
-
-        colour_temp_range = self._api.get_attribute("light_colour_temp")[
-            "int_values"
-        ]["range"]
-
-        return colour_temp_range["min"], colour_temp_range["max"]
+        r = self._api.get_attribute("light_colour_temp")["int_values"]["range"]
+        return r["min"], r["max"]
 
     @property
     def color_temp_kelvin(self) -> int | None:
-
         if self.color_mode != ColorMode.COLOR_TEMP:
             return None
-
-        colour_temp = int(self._api.get_state("light_colour_temp")["integer_value"])
-
+        val = int(self._api.get_state("light_colour_temp")["integer_value"])
         return scale_ranged_value_to_int_range(
-            self.color_temp_range,
-            self._real_color_temp_range,
-            colour_temp,
+            self.color_temp_range, self._real_color_temp_range, val
         )
 
     @property
     def color_range(self) -> dict[str, tuple[int, int]]:
-
-        colour_values = self._api.get_attribute("light_colour")["color_values"]
-
+        c = self._api.get_attribute("light_colour")["color_values"]
         return {
-            "h": (colour_values["h"]["min"], colour_values["h"]["max"]),
-            "s": (colour_values["s"]["min"], colour_values["s"]["max"]),
-            "v": (colour_values["v"]["min"], colour_values["v"]["max"]),
+            "h": (c["h"]["min"], c["h"]["max"]),
+            "s": (c["s"]["min"], c["s"]["max"]),
+            "v": (c["v"]["min"], c["v"]["max"]),
         }
 
     @property
     def hs_color(self) -> tuple[float, float] | None:
-
         if self.color_mode != ColorMode.HS:
             return None
-
         if self._hs_color is not None:
             return self._hs_color
-
-        colour = self._api.get_state("light_colour")["color_value"]
-
+        c = self._api.get_state("light_colour")["color_value"]
         return (
-            scale_ranged_value_to_int_range(
-                self.color_range["h"], H_RANGE, colour["h"]
-            ),
-            scale_ranged_value_to_int_range(
-                self.color_range["s"], S_RANGE, colour["s"]
-            ),
+            scale_ranged_value_to_int_range(self.color_range["h"], H_RANGE, c["h"]),
+            scale_ranged_value_to_int_range(self.color_range["s"], S_RANGE, c["s"]),
         )
 
     async def async_turn_on(self, **kwargs) -> None:
-
         states = [{"key": "on_off", "bool_value": True}]
 
         if ATTR_BRIGHTNESS in kwargs:
-
-            brightness = kwargs[ATTR_BRIGHTNESS]
-
+            b = kwargs[ATTR_BRIGHTNESS]
             states.append(
-                {
-                    "key": "light_brightness",
-                    "integer_value": math.ceil(
-                        brightness_to_value(self.brightness_range, brightness)
-                    ),
-                }
+                {"key": "light_brightness", "integer_value": math.ceil(
+                    brightness_to_value(self.brightness_range, b)
+                )}
             )
 
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
-
             t = scale_ranged_value_to_int_range(
                 self._real_color_temp_range,
                 self.color_temp_range,
                 kwargs[ATTR_COLOR_TEMP_KELVIN],
             )
-
-            states.extend(
-                (
-                    {"key": "light_mode", "enum_value": "white"},
-                    {"key": "light_colour_temp", "integer_value": t},
-                )
-            )
+            states.extend((
+                {"key": "light_mode", "enum_value": "white"},
+                {"key": "light_colour_temp", "integer_value": t},
+            ))
 
         if ATTR_HS_COLOR in kwargs:
-
             h, s = kwargs[ATTR_HS_COLOR]
-
-            states.extend(
-                (
-                    {"key": "light_mode", "enum_value": "colour"},
-                    {
-                        "key": "light_colour",
-                        "color_value": {
-                            "h": scale_ranged_value_to_int_range(
-                                H_RANGE,
-                                self.color_range["h"],
-                                h,
-                            ),
-                            "s": scale_ranged_value_to_int_range(
-                                S_RANGE,
-                                self.color_range["s"],
-                                s,
-                            ),
-                            "v": math.ceil(
-                                brightness_to_value(
-                                    self.color_range["v"],
-                                    self.brightness or 255,
-                                )
-                            ),
-                        },
-                    },
-                )
-            )
+            states.extend((
+                {"key": "light_mode", "enum_value": "colour"},
+                {"key": "light_colour",
+                 "color_value": {
+                     "h": scale_ranged_value_to_int_range(H_RANGE, self.color_range["h"], h),
+                     "s": scale_ranged_value_to_int_range(S_RANGE, self.color_range["s"], s),
+                     "v": math.ceil(brightness_to_value(self.color_range["v"], self.brightness or 255))
+                 }}
+            ))
 
         await self._api.set_states(states)
-
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
-
         await self._api.set_on_off(False)
-
         await self.coordinator.async_request_refresh()
